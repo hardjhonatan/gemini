@@ -5,7 +5,7 @@ import path, { join } from "path";
 import { promisify } from "util";
 
 import { map_msg } from "../../utils/global";
-
+import socketIOClient from 'socket.io-client';
 import {
   downloadMediaMessage,
   extractMessageContent,
@@ -1929,6 +1929,7 @@ console.log(queueIntegration.type);
       console.error("Error processing message with Dify:", error);
     }
   } else if (queueIntegration.type === "flowise") {
+    
   if (queueIntegration?.urlN8N) {
     // Extrair a mensagem atual do usuário
     const userMessage = msg.message?.conversation || 
@@ -2040,15 +2041,15 @@ console.log(queueIntegration.type);
       });
 
       // Verifica se a resposta é bem-sucedida
+      console.log("Resposta completa do Flowise:", response);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      console.log("Resposta completa do Flowise:", response);
       // Tenta analisar a resposta como JSON
       const contentType = response.headers.get("content-type");
+      
       if (contentType && contentType.indexOf("application/json") !== -1) {
         const result = await response.json();
-        
         if (result && result.text) {
           const responseText = result.text;
           // Enviar a resposta de volta ao usuário
@@ -2061,11 +2062,41 @@ console.log(queueIntegration.type);
           //console.log("Resposta inesperada do Flowise:", result);
           throw new Error("Resposta inesperada do Flowise"); 
         }
+        
+      } else  if (response.body instanceof ReadableStream) {
+        const reader = response.body.getReader();
+        let decoder = new TextDecoder();
+        let buffer = '';
+  
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+  
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() || ''; // Mantém a última linha incompleta
+  
+          for (const line of lines) {
+            if (line.trim().startsWith('data: ')) {
+              try {
+                const eventData = JSON.parse(line.slice(5).trim()); // Analisa o JSON na linha
+                if (eventData.token) { // Verifica se existe um token no evento
+                  await wbot.sendMessage(
+                    `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
+                    { text: eventData.token }
+                  );
+                }
+              } catch (jsonError) {
+                console.error('Erro ao analisar JSON na resposta em stream:', jsonError);
+              }
+            }
+          }
+        }
       } else {
-        // Se não for JSON, lê como texto
+        // Resposta não esperada (nem stream nem JSON)
         const text = await response.text();
-        console.error("Resposta não-JSON recebida:", text);
-        throw new Error("Resposta não-JSON recebida do servidor");
+        console.error("Resposta não esperada do Flowise:", text);
+        throw new Error("Resposta não esperada do Flowise");
       }
     } catch (error) {
       console.error("Error processing Flowise response:", error); 
